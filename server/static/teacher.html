@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Панель учителя</title>
+<style>
+  :root { --red:#c8102e; --dark:#1e293b; --bg:#f1f5f9; --card:#fff; --line:#e2e8f0; }
+  * { box-sizing:border-box; font-family:'Segoe UI',Tahoma,sans-serif; }
+  body { margin:0; background:var(--bg); color:var(--dark); }
+  header { background:var(--red); color:#fff; padding:12px 20px; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:1.1rem; margin:0; flex:1; }
+  .conn { padding:4px 10px; border-radius:12px; font-size:.85rem; font-weight:600; background:#16a34a; }
+  .conn.bad { background:#475569; }
+  main { max-width:1200px; margin:16px auto; padding:0 12px; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 14px; }
+  .stat b { display:block; font-size:1.7rem; }
+  .stat span { font-size:.8rem; color:#64748b; }
+  h2 { font-size:1.05rem; margin:18px 0 8px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:10px; }
+  .dev { background:var(--card); border:1px solid var(--line); border-left:6px solid #94a3b8; border-radius:8px; padding:8px 10px; min-height:96px; }
+  .dev.online { border-left-color:#16a34a; }
+  .dev.testing { border-left-color:#2563eb; }
+  .dev.done { border-left-color:#d97706; }
+  .dev.offline { opacity:.6; border-left-color:#dc2626; }
+  .dev .top { display:flex; justify-content:space-between; font-weight:700; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:#94a3b8; margin-right:6px; }
+  .online .dot { background:#16a34a; } .offline .dot { background:#dc2626; }
+  .dev .fio { font-size:.85rem; margin-top:4px; min-height:1.2em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .dev .meta { font-size:.75rem; color:#64748b; margin-top:2px; }
+  .bar { height:7px; background:#e2e8f0; border-radius:4px; margin-top:6px; overflow:hidden; }
+  .bar i { display:block; height:100%; background:#2563eb; }
+  .tools { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0; }
+  button, a.btn { background:#475569; color:#fff; border:0; border-radius:6px; padding:8px 14px; font-size:.9rem; cursor:pointer; text-decoration:none; }
+  button.red { background:#dc2626; } a.btn { background:#4a5d23; }
+  table { width:100%; border-collapse:collapse; background:var(--card); font-size:.88rem; }
+  th, td { border:1px solid var(--line); padding:7px 9px; text-align:left; }
+  th { background:#f8fafc; }
+  .g { color:#fff; font-weight:700; padding:2px 9px; border-radius:4px; }
+  .g5 { background:#16a34a; } .g4 { background:#2563eb; } .g3 { background:#d97706; } .g2 { background:#dc2626; }
+  .wrap { overflow-x:auto; }
+  .err { background:#fff7ed; font-size:.82rem; }
+  .err div { margin:4px 0; }
+  .empty { color:#64748b; padding:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Панель учителя — тестирование</h1>
+  <span id="conn" class="conn bad">Нет связи с сервером</span>
+</header>
+<main>
+  <div class="stats">
+    <div class="stat"><b id="sOnline">0</b><span>ноутбуков в сети</span></div>
+    <div class="stat"><b id="sTesting">0</b><span>сейчас отвечают</span></div>
+    <div class="stat"><b id="sDone">0</b><span>сдали работу</span></div>
+    <div class="stat"><b id="sAvg">–</b><span>средний балл</span></div>
+  </div>
+
+  <h2>Ноутбуки</h2>
+  <div id="grid" class="grid"></div>
+
+  <h2>Результаты</h2>
+  <div class="tools">
+    <a class="btn" href="/api/teacher/export.csv">Скачать CSV (Excel)</a>
+    <button onclick="window.print()">Печать</button>
+    <button class="red" onclick="clearAll()">Очистить результаты</button>
+  </div>
+  <div class="wrap">
+    <table>
+      <thead><tr><th>№</th><th>Время</th><th>Ноутбук</th><th>ФИО</th><th>Возраст</th><th>Школа</th><th>Длительность</th><th>Баллы</th><th>Оценка</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div id="noRes" class="empty">Результатов пока нет.</div>
+</main>
+
+<script>
+var open = {};
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function mmss(s) { s = Math.max(0, s | 0); return ('0' + Math.floor(s / 60)).slice(-2) + ':' + ('0' + (s % 60)).slice(-2); }
+function hhmmss(t) { var d = new Date(t * 1000); return d.toLocaleTimeString('ru-RU'); }
+
+function render(st) {
+  var online = 0, testing = 0, grid = '';
+  st.devices.forEach(function (d) {
+    var cls = d.online ? 'online' : 'offline', label = d.online ? 'в сети' : 'не в сети';
+    if (d.online && d.state === 'testing') { cls += ' testing'; testing++; label = 'тест идёт'; }
+    else if (d.online && d.state === 'done') { cls += ' done'; label = 'сдал'; }
+    if (d.online) { online++; }
+    var pct = d.total ? Math.round(100 * d.answered / d.total) : 0;
+    var extra = '';
+    if (d.online && d.state === 'testing') {
+      extra = '<div class="bar"><i style="width:' + pct + '%"></i></div><div class="meta">' + d.answered + '/' + d.total + ' · осталось ' + mmss(d.seconds_left) + '</div>';
+    } else if (!d.online) {
+      extra = '<div class="meta">' + (d.last_seen ? 'был ' + hhmmss(d.last_seen) : 'ещё не подключался') + '</div>';
+    } else { extra = '<div class="meta">' + esc(d.ip) + '</div>'; }
+    grid += '<div class="dev ' + cls + '"><div class="top"><span><span class="dot"></span>' + esc(d.id) + '</span><span style="font-weight:400;font-size:.75rem">' + label + '</span></div>' +
+      '<div class="fio">' + esc(d.fio) + '</div>' + extra + '</div>';
+  });
+  document.getElementById('grid').innerHTML = grid;
+
+  var res = st.results.slice().reverse(), sum = 0, html = '';
+  res.forEach(function (r, i) {
+    var rec = r.record || {};
+    sum += rec.score || 0;
+    var n = res.length - i;
+    html += '<tr><td>' + n + '</td><td>' + hhmmss(r.received_at) + '</td><td>' + esc(r.device) + '</td><td>' + esc(rec.fio) + '</td><td>' + esc(rec.age) + '</td><td>' + esc(rec.group) + '</td><td>' + esc(rec.duration) + '</td><td><b>' + esc(rec.score) + '</b> / ' + esc(rec.total) + '</td><td><span class="g g' + esc(rec.gradeNum) + '">' + esc(rec.gradeNum) + ' ' + esc(rec.gradeText) + '</span></td><td><button onclick="toggle(\'' + esc(r.uid) + '\')">Ошибки</button></td></tr>';
+    if (open[r.uid]) {
+      var bad = (r.details || []).filter(function (x) { return !x.ok; });
+      html += '<tr><td colspan="10" class="err">' + (bad.length ? bad.map(function (x) {
+        return '<div><b>' + esc(x.q) + '</b><br>Ответ ученика: ' + esc(x.chosen) + ' · Верно: ' + esc(x.correct) + '</div>';
+      }).join('') : 'Ошибок нет или разбор не передан.') + '</td></tr>';
+    }
+  });
+  document.getElementById('rows').innerHTML = html;
+  document.getElementById('noRes').style.display = res.length ? 'none' : 'block';
+  document.getElementById('sOnline').textContent = online + ' / ' + st.devices.length;
+  document.getElementById('sTesting').textContent = testing;
+  document.getElementById('sDone').textContent = res.length;
+  document.getElementById('sAvg').textContent = res.length ? (sum / res.length).toFixed(1) : '–';
+}
+
+var last = null;
+function toggle(uid) { open[uid] = !open[uid]; if (last) { render(last); } }
+function clearAll() {
+  if (!confirm('Удалить ВСЕ результаты? Это действие нельзя отменить.')) { return; }
+  fetch('/api/teacher/clear', { method: 'POST', body: '{}' }).then(poll);
+}
+
+function poll() {
+  fetch('/api/teacher/state', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (st) {
+    last = st; render(st);
+    var c = document.getElementById('conn'); c.textContent = 'Сервер на связи'; c.className = 'conn';
+  }).catch(function () {
+    var c = document.getElementById('conn'); c.textContent = 'Нет связи с сервером'; c.className = 'conn bad';
+  });
+}
+poll(); setInterval(poll, 1000);
+</script>
+</body>
+</html>
